@@ -42,6 +42,7 @@ app = Flask(__name__)
 #################################################
 # Flask Routes
 #################################################
+# Welcome page listing all available api routes
 
 @app.route("/")
 def welcome():
@@ -54,6 +55,8 @@ def welcome():
         f"/api/v1.0/<start><br/>"
         f"/api/v1.0/<end>"
     )
+
+# Route to the precipitation page listing precipitation data by day/date for the last year
 
 @app.route("/api/v1.0/precipitation")
 def precipitation():
@@ -96,14 +99,14 @@ def precipitation():
     return jsonify(last_year_precipitation)
 
     session.close()
-
+# Set route to display all stations
 @app.route("/api/v1.0/stations")
 def names():
     # Create our session (link) from Python to the DB
     session = Session(engine)
 
     # Design a query to find all of the stations
-    results = session.query(station.station).all()
+    results = session.query(station.name).all()
 
     session.close()
 
@@ -112,6 +115,8 @@ def names():
 
     return jsonify(station_names)   
 
+# Set route to display temperature for the last year at the most active station
+# Note most active station was previously found in the 
 @app.route("/api/v1.0/tobs")
 def temperature():
     # Create our session (link) from Python to the DB
@@ -127,8 +132,23 @@ def temperature():
     # Turn date back into string
     one_year_ago_str = one_year_ago.strftime('%Y-%m-%d')
 
-    # Assign most active station to station id
-    most_active_station = 'USC00519281'    
+    # Run query for most active station, select first at end to return one result
+    most_active_station = session.query(
+                    station.station,  # Select the station identifier
+                    station.name, # also include station name in the query to display in the results
+                    func.count(measurement.id).label('count')  # Count of entries for each station
+    ).join(
+                    measurement,  # Join with the measurement table
+                    measurement.station == station.station  # Join on station
+    ).group_by(
+                    station.station,  # Group by station to count rows per station
+                    station.name #Inclue station name in the group by as well
+    ).order_by(
+                    func.count(measurement.id).desc()  # Order by count in descending order
+    ).first()  
+
+    #Assign results into a variable
+    most_active_station_id = most_active_station[0]    
     
     # Query for date and temperature filter to last year and most active station
     temperature_data = session.query(
@@ -137,14 +157,8 @@ def temperature():
     ).filter(
                 measurement.date >= one_year_ago_str, 
                 measurement.date <= most_recent_date,
-                station.station == most_active_station
+                station.station == most_active_station_id
     ).all()
-
-    # Save the query results as a Pandas DataFrame. Explicitly set the column names
-    # measurement_df = pd.DataFrame(precipitation_data, columns=['date', 'precipitation'])
-
-    # # Sort the dataframe by date
-    # measurement_sort = measurement_df.sort_values(by='date', ascending=True)
 
     # Create a dictionary from the row data and append to a list of dates
     active_station_temperature = []
@@ -157,6 +171,50 @@ def temperature():
     return jsonify(active_station_temperature)
 
     session.close()
+
+    
+# Set route to display TMIN, TAVG, TMAX for a specified start date or start-end range
+@app.route("/api/v1.0/<start>")
+@app.route("/api/v1.0/<start>/<end>")
+def temperature_range(start, end=None):
+    # Create our session (link) from Python to the DB
+    session = Session(engine)
+
+    # Check if 'end' is provided, if not, set it to today's date
+    if end is None:
+        end = dt.datetime.now().strftime('%Y-%m-%d')
+
+    # Ensure the dates are in the correct format (YYYY-MM-DD)
+    try:
+        start_date = dt.datetime.strptime(start, '%Y-%m-%d')
+        end_date = dt.datetime.strptime(end, '%Y-%m-%d')
+    except ValueError:
+        return jsonify({"error": "Invalid date format. Please use YYYY-MM-DD."}), 400
+
+    # Query to calculate TMIN, TAVG, TMAX
+    temperature_stats = session.query(
+        func.min(measurement.tobs).label('TMIN'),
+        func.avg(measurement.tobs).label('TAVG'),
+        func.max(measurement.tobs).label('TMAX')
+    ).filter(
+        measurement.date >= start_date,
+        measurement.date <= end_date
+    ).all()
+
+    # Close the session
+    session.close()
+
+    # Check if any results were found
+    if temperature_stats:
+        return jsonify({
+            "start_date": start,
+            "end_date": end,
+            "TMIN": temperature_stats[0][0],
+            "TAVG": temperature_stats[0][1],
+            "TMAX": temperature_stats[0][2]
+        })
+    else:
+        return jsonify({"error": "No temperature data found for the specified date range."}), 404
 
 
 if __name__ == "__main__":

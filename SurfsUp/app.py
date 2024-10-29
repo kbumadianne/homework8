@@ -15,10 +15,8 @@ from flask import Flask, jsonify
 #################################################
 # Database Setup
 #################################################
-#engine = create_engine("sqlite:///Resources/hawaii.sqlite")
+engine = create_engine("sqlite:///Resources/hawaii.sqlite")
 
-database_path = os.path.join(os.path.dirname(__file__), 'Resources', 'hawaii.sqlite')
-engine = create_engine(f"sqlite:///{database_path}")
 
 # reflect an existing database into a new model
 Base = automap_base()
@@ -51,9 +49,9 @@ def welcome():
         f"Available Routes:<br/>"
         f"/api/v1.0/precipitation<br/>"
         f"/api/v1.0/stations<br/>"
-        f"/api/v1.0/tobs<br/>"
-        f"/api/v1.0/<start><br/>"
-        f"/api/v1.0/<end>"
+        f"/api/v1.0/temp<br/>"
+        f"/api/v1.0/temp/<start><br/>"
+        f"/api/v1.0/temp/<start>/<end>"
     )
 
 # Route to the precipitation page listing precipitation data by day/date for the last year
@@ -117,7 +115,7 @@ def names():
 
 # Set route to display temperature for the last year at the most active station
 # Note most active station was previously found in the 
-@app.route("/api/v1.0/tobs")
+@app.route("/api/v1.0/temp")
 def temperature():
     # Create our session (link) from Python to the DB
     session = Session(engine)
@@ -132,7 +130,7 @@ def temperature():
     # Turn date back into string
     one_year_ago_str = one_year_ago.strftime('%Y-%m-%d')
 
-    # Run query for most active station, select first at end to return one result
+    # Run query for most active station, note first at end to return one result
     most_active_station = session.query(
                     station.station,  # Select the station identifier
                     station.name, # also include station name in the query to display in the results
@@ -165,7 +163,7 @@ def temperature():
     for date, temperature in temperature_data:
         temperature_dict = {}
         temperature_dict["date"] = date
-        temperature_dict["precipitation"] = temperature
+        temperature_dict["temperature"] = temperature
         active_station_temperature.append(temperature_dict)
 
     return jsonify(active_station_temperature)
@@ -174,22 +172,51 @@ def temperature():
 
     
 # Set route to display TMIN, TAVG, TMAX for a specified start date or start-end range
-@app.route("/api/v1.0/<start>")
-@app.route("/api/v1.0/<start>/<end>")
+@app.route("/api/v1.0/temp/<start>")
+def temperature_range_start(start):
+    # Create our session (link) from Python to the DB
+    session = Session(engine)
+
+    # Ensure the dates are in the correct format (DD-MM-YYYY)
+    try:
+        start_date = dt.datetime.strptime(start, '%m%d%Y')
+    except ValueError:
+        return jsonify({"error": "Invalid date format. Please use MMDDYYYY."}), 400
+
+    # Query to calculate TMIN, TAVG, TMAX
+    temperature_stats = session.query(
+        func.min(measurement.tobs).label('TMIN'),
+        func.avg(measurement.tobs).label('TAVG'),
+        func.max(measurement.tobs).label('TMAX')
+    ).filter(
+        measurement.date >= start_date,
+    ).all()
+
+    # Close the session
+    session.close()
+
+    # Check if any results were found
+    if temperature_stats:
+        return jsonify({
+            "start_date": start,
+            "TMIN": temperature_stats[0][0],
+            "TAVG": temperature_stats[0][1],
+            "TMAX": temperature_stats[0][2]
+        })
+    else:
+        return jsonify({"error": "No temperature data found for the specified date range."}), 404
+
+@app.route("/api/v1.0/temp/<start>/<end>")
 def temperature_range(start, end=None):
     # Create our session (link) from Python to the DB
     session = Session(engine)
 
-    # Check if 'end' is provided, if not, set it to today's date
-    if end is None:
-        end = dt.datetime.now().strftime('%Y-%m-%d')
-
-    # Ensure the dates are in the correct format (YYYY-MM-DD)
+    # Ensure the dates are in the correct format (DD-MM-YYYY)
     try:
-        start_date = dt.datetime.strptime(start, '%Y-%m-%d')
-        end_date = dt.datetime.strptime(end, '%Y-%m-%d')
+        start_date = dt.datetime.strptime(start, '%m%d%Y')
+        end_date = dt.datetime.strptime(end, '%m%d%Y')
     except ValueError:
-        return jsonify({"error": "Invalid date format. Please use YYYY-MM-DD."}), 400
+        return jsonify({"error": "Invalid date format. Please use MMDDYYYY."}), 400
 
     # Query to calculate TMIN, TAVG, TMAX
     temperature_stats = session.query(
@@ -215,6 +242,7 @@ def temperature_range(start, end=None):
         })
     else:
         return jsonify({"error": "No temperature data found for the specified date range."}), 404
+
 
 
 if __name__ == "__main__":
